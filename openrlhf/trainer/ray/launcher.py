@@ -190,6 +190,8 @@ class RewardModelRayActor(BasePPORole):
 class PPORayActorGroup:
     """
     A group of ray actors
+    主要是管理一种role的model，例如actor/critic/reward/ref
+    一种role的model可能有多个实例化，因此是group
     Functions start with 'async' should return list of object refs
 
     Args:
@@ -206,7 +208,7 @@ class PPORayActorGroup:
         self,
         num_nodes,
         num_gpus_per_node,
-        ray_actor_type: Type[BasePPORole],
+        ray_actor_type: Type[BasePPORole],  # 泛型class
         pg: PlacementGroup = None,
         num_gpus_per_actor=1,
         duplicate_actors: int = 1,
@@ -226,6 +228,7 @@ class PPORayActorGroup:
         self._initiate_actors(pg, num_gpus_per_actor)
 
     def _initiate_actors(self, pg, num_gpus_per_actor):
+        # world size ，所有GPU数量
         world_size = self._num_nodes * self._num_gpus_per_node
 
         # Use placement group to lock resources for models of same type
@@ -239,6 +242,7 @@ class PPORayActorGroup:
             pg = placement_group(bundles, strategy="PACK")
             ray.get(pg.ready())
         if pg:
+            # options 可以覆盖class上ray.remote注解中的参数,注意不是class中的变量
             master_actor = self.ray_actor_type.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
@@ -253,6 +257,7 @@ class PPORayActorGroup:
                 num_gpus=num_gpus_per_actor,
                 resources=self._resources,
             ).remote(world_size, 0, None, None)
+        # 创建master actor model
         self._actor_handlers = [master_actor]
 
         # Create worker actors
@@ -274,7 +279,11 @@ class PPORayActorGroup:
                         num_cpus=num_gpus_per_actor,
                         num_gpus=num_gpus_per_actor,
                         resources=self._resources,
-                    ).remote(world_size, rank, master_addr, master_port)
+                    ).remote(
+                        world_size, rank, master_addr, master_port
+                    )  # 注意这里是给整整的ray_actor_type class初始化实例的init方法传参
+
+                # self._actor_handlers 中一共创建world size个model的实例，注意是在ray的远端worker进程中创建的
                 self._actor_handlers.append(worker_actor)
 
     def async_init_model_from_pretrained(

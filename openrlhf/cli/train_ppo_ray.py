@@ -34,8 +34,12 @@ def train(args):
                 and args.actor_num_gpus_per_node == args.ref_num_gpus_per_node
             ), f"num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
 
+        # placement group，从ray集群中预留资源
+        # pg可理解为，在ray cluster中锁定/预留一片资源，然后只在这片资源上部署该模型全部实例。
+        # （pg维护在Head Node的GCS上，参见3.3）
         bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.actor_num_nodes * args.actor_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
+        # 阻塞直到资源ready
         ray.get(pg.ready())
 
     # init vLLM engine for text generation
@@ -43,6 +47,7 @@ def train(args):
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         if args.colocate_all_models and not args.async_train:
+            # 这种应该是指每个gpu上会放置所有model一套，用来做micro batch，因此需要actor和vllm节点数量一致
             assert (
                 args.actor_num_nodes * args.actor_num_gpus_per_node
                 == args.vllm_num_engines * args.vllm_tensor_parallel_size
@@ -73,6 +78,7 @@ def train(args):
             args.agent_func_path,
         )
 
+    # init actor
     actor_model = PPORayActorGroup(
         args.actor_num_nodes,
         args.actor_num_gpus_per_node,
@@ -82,6 +88,7 @@ def train(args):
         duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
     )
 
+    # init ref model
     if args.init_kl_coef <= 0:
         ref_model = None
     else:
@@ -108,6 +115,7 @@ def train(args):
         pg = placement_group(bundles, strategy="PACK")
         ray.get(pg.ready())
 
+    # init critic model
     if args.critic_pretrain:
         critic_model = PPORayActorGroup(
             args.critic_num_nodes,
